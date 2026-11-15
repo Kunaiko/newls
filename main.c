@@ -32,10 +32,10 @@ void print_long(const char *dir, const char *name);
 int alphabetical_sort(const void *pointer_to_a, const void *pointer_to_b);
 int size_sort(const void *pointer_to_a, const void *pointer_to_b);
 
-int show_all = 0;
-int long_format = 0;
-int reverse = 0;
-int size = 0;
+int show_all = 0;       /* -a: include entries starting with . */
+int long_format = 0;    /* -l: use long listing format */
+int reverse = 0;        /* -r: reverse order while sorting */
+int size = 0;           /* -S: sort by file size */
 
 const char *current_sorting_path = NULL;
 
@@ -78,13 +78,17 @@ int main(int argc, char **argv) {
     return 0;
 }
 
+/**
+ * list_directory - Read, sort, and output directory contents
+ * @dir: Open directory stream to process
+ * @path: Filesystem path associated with the directory stream
+ */
 void list_directory(DIR *dir, const char *path) {
     struct dirent *entry;
 
-    // Creating **names to store d_name
     int total = 0;
-    int cappacity = 10;
-    char **names = malloc(cappacity * sizeof(char *));
+    int capacity = 10;
+    char **names = malloc(capacity * sizeof(char *));
 
     if(names == NULL) {
         perror("**names malloc");
@@ -93,9 +97,9 @@ void list_directory(DIR *dir, const char *path) {
 
     while((entry = readdir(dir)) != NULL) {
         if(!show_all && entry->d_name[0] == '.') continue;
-        if(total >= cappacity) {
-            cappacity *= 2;
-            char **temp = realloc(names, cappacity *sizeof(char *));
+        if(total >= capacity) {
+            capacity *= 2;
+            char **temp = realloc(names, capacity *sizeof(char *));
 
             if(temp == NULL) {
                 perror("names realloc");
@@ -110,7 +114,6 @@ void list_directory(DIR *dir, const char *path) {
         total++;
     }
 
-    // Sorting
     current_sorting_path = path;
     if(size) {
         qsort(names, total, sizeof(char *), size_sort);
@@ -118,7 +121,6 @@ void list_directory(DIR *dir, const char *path) {
         qsort(names, total, sizeof(char *), alphabetical_sort);
     }
 
-    // Printing to the screen
     for(int i = 0; i < total; i++) {
         if(long_format) {
             print_long(path, names[i]);
@@ -130,14 +132,19 @@ void list_directory(DIR *dir, const char *path) {
     }
 }
 
+/**
+ * mode_string - Construct a POSIX file permission string
+ * @mode: File type and mode bits from stat structure
+ * @str: Destination buffer of at least 11 bytes to hold the result
+ */
 void mode_string(mode_t mode, char *str) {
-    if (S_ISDIR(mode))          str[0] = 'd'; // directory
-    else if (S_ISCHR(mode))     str[0] = 'c'; // char device
-    else if (S_ISBLK(mode))     str[0] = 'b'; // block device
-    else if (S_ISFIFO(mode))    str[0] = 'p'; // FIFO (named pipe)
-    else if (S_ISLNK(mode))     str[0] = 'l'; // sim link
-    else if (S_ISSOCK(mode))    str[0] = 's'; // socket
-    else                        str[0] = '-'; // regular files (& others)
+    if (S_ISDIR(mode))          str[0] = 'd';
+    else if (S_ISCHR(mode))     str[0] = 'c';
+    else if (S_ISBLK(mode))     str[0] = 'b';
+    else if (S_ISFIFO(mode))    str[0] = 'p';
+    else if (S_ISLNK(mode))     str[0] = 'l';
+    else if (S_ISSOCK(mode))    str[0] = 's';
+    else                        str[0] = '-';
 
     str[1] = (mode & S_IRUSR) ? 'r' : '-';
     str[2] = (mode & S_IWUSR) ? 'w' : '-';
@@ -151,13 +158,18 @@ void mode_string(mode_t mode, char *str) {
     str[10] = '\0';
 }
 
+/**
+ * print_long - Output detailed metadata for a filesystem entry
+ * @dir: Parent directory path
+ * @name: Entry filename
+ */
 void print_long(const char *dir, const char *name) {
-    char fullpath[4096]; // max path on Linux 
+    char fullpath[4096]; /* Enforce Linux PATH_MAX limit */
     snprintf(fullpath, sizeof(fullpath), "%s/%s", dir, name);
 
     struct stat sb;
     if(lstat(fullpath, &sb) < 0) {
-        perror(name); // in case the file is deleted or if the user doesn't have permission
+        perror(name); /* Handle race conditions where target is removed/inaccessible */
         return;
     }
 
@@ -167,15 +179,13 @@ void print_long(const char *dir, const char *name) {
     struct passwd *pw = getpwuid(sb.st_uid);
     struct group *gr = getgrgid(sb.st_gid);
 
-    //if a file doesn't have a valid UID it won't crash the program
+    /* Fallback to '?' if UID/GID cannot be mapped */
     const char *user = pw ? pw->pw_name : "?";
     const char *group = gr ? gr->gr_name : "?";
 
-    //TIME
-    char time[64];
-
+    char time_buf[64];
     struct tm *tm = localtime(&sb.st_mtim.tv_sec);
-    strftime(time, sizeof(time), "%e %b %H:%M", tm);
+    strftime(time_buf, sizeof(time_buf), "%e %b %H:%M", tm);
 
     printf(
             "%s %lu %s %s %ld %s %s\n", 
@@ -184,11 +194,16 @@ void print_long(const char *dir, const char *name) {
             user, 
             group, 
             (long)sb.st_size, 
-            time, 
+            time_buf, 
             name
           );
 }
 
+/**
+ * alphabetical_sort - qsort comparator for lexical ordering
+ * @pointer_to_a: Pointer to first entry string
+ * @pointer_to_b: Pointer to second entry string
+ */
 int alphabetical_sort(const void *pointer_to_a, const void *pointer_to_b) {
     const char *a = *(const char **)pointer_to_a;
     const char *b = *(const char **)pointer_to_b;
@@ -199,6 +214,11 @@ int alphabetical_sort(const void *pointer_to_a, const void *pointer_to_b) {
     return strcmp(a, b);
 }
 
+/**
+ * size_sort - qsort comparator for file size ordering
+ * @pointer_to_a: Pointer to first entry string
+ * @pointer_to_b: Pointer to second entry string
+ */
 int size_sort(const void *pointer_to_a, const void *pointer_to_b) {
     const char *name_a = *(const char **)pointer_to_a;
     const char *name_b = *(const char **)pointer_to_b;
@@ -212,14 +232,13 @@ int size_sort(const void *pointer_to_a, const void *pointer_to_b) {
     struct stat sb_a, sb_b;
 
     if(lstat(path_a, &sb_a) < 0) {
-        perror(name_a); // in case the file is deleted or if the user doesn't have permission
+        perror(name_a);
         return 0;
     } else if(lstat(path_b, &sb_b) < 0) {
         perror(name_b);
         return 0;
     }
 
-    //Sorting by size
     if(reverse) {
         if(sb_a.st_size > sb_b.st_size) return 1;
         if(sb_a.st_size < sb_b.st_size) return -1;
