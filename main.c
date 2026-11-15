@@ -1,27 +1,46 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/types.h>
 #include <dirent.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <pwd.h>
 #include <grp.h>
+#include <time.h>
+#include <string.h>
 
-void list_directory(DIR *dir, int show_all, const char *path);
+void list_directory(DIR *dir, const char *path);
 void mode_string(mode_t mode, char *str);
 void print_long(const char *dir, const char *name);
+int alphabetical_sort(const void *pointer_to_a, const void *pointer_to_b);
+int size_sort(const void *pointer_to_a, const void *pointer_to_b);
 
 int show_all = 0;
+int long_format = 0;
+int reverse = 0;
+int size = 0;
+
+const char *current_sorting_path = NULL;
 
 int main(int argc, char **argv) {
     int opt = 0;
 
-    while((opt = getopt(argc, argv, "a")) != -1) {
+    while((opt = getopt(argc, argv, "alrS")) != -1) {
         switch(opt) {
             case 'a':
                 show_all = 1;
                 break;
+            case 'l':
+                long_format = 1;
+                break;
+            case 'r':
+                reverse = 1;
+                break;
+            case 'S':
+                size = 1;
+                break;
             default:
-                fprintf(stderr, "usage: %s [-a] [path]", argv[0]);
+                fprintf(stderr, "usage: %s [-alrS] [path]", argv[0]);
                 return 1;
         }
     }
@@ -35,21 +54,63 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    list_directory(dir, show_all, path);
+    list_directory(dir, path);
 
     closedir(dir);
 
     return 0;
 }
 
-void list_directory(DIR *dir, int show_all, const char *path) {
+void list_directory(DIR *dir, const char *path) {
     struct dirent *entry;
-    while((entry = readdir(dir)) != NULL) {
-        if(!show_all && entry->d_name[0] == '.') continue;
-        print_long(path, entry->d_name);
-        //printf("%s\n", entry->d_name);
+
+    // Creating **names to store d_name
+    int total = 0;
+    int cappacity = 10;
+    char **names = malloc(cappacity * sizeof(char *));
+
+    if(names == NULL) {
+        perror("**names malloc");
+        return;
     }
 
+    while((entry = readdir(dir)) != NULL) {
+        if(!show_all && entry->d_name[0] == '.') continue;
+        if(total >= cappacity) {
+            cappacity *= 2;
+            char **temp = realloc(names, cappacity *sizeof(char *));
+
+            if(temp == NULL) {
+                perror("names realloc");
+                for(int i = 0; i < total; i++) free(names[i]);
+                free(names);
+                return;
+            }
+            names = temp;
+        }
+
+        names[total] = strdup(entry->d_name);
+        total++;
+    }
+
+    // Sorting
+    current_sorting_path = path;
+    if(size) {
+        qsort(names, total, sizeof(char *), size_sort);
+    } else {
+        qsort(names, total, sizeof(char *), alphabetical_sort);
+    }
+
+    // Printing to the screen
+    for(int i = 0; i < total; i++) {
+        if(long_format) {
+            print_long(path, names[i]);
+        } else {
+            printf("%s\n", names[i]);
+        }
+
+        free(names[i]);
+    }
 }
 
 void mode_string(mode_t mode, char *str) {
@@ -73,13 +134,13 @@ void mode_string(mode_t mode, char *str) {
     str[10] = '\0';
 }
 
-void print_long(const char *dir, const char *file) {
+void print_long(const char *dir, const char *name) {
     char fullpath[4096]; // max path on Linux 
-    snprintf(fullpath, sizeof(fullpath), "%s/%s", dir, file);
-    
+    snprintf(fullpath, sizeof(fullpath), "%s/%s", dir, name);
+
     struct stat sb;
     if(lstat(fullpath, &sb) < 0) {
-        perror(file); // in case the file is deleted or if the user doesn't have permission
+        perror(name); // in case the file is deleted or if the user doesn't have permission
         return;
     }
 
@@ -87,10 +148,68 @@ void print_long(const char *dir, const char *file) {
     mode_string(sb.st_mode, modes);
 
     struct passwd *pw = getpwuid(sb.st_uid);
-    struct group *gr = getgrgid(sb.st_uid);
+    struct group *gr = getgrgid(sb.st_gid);
 
+    //if a file doesn't have a valid UID it won't crash the program
     const char *user = pw ? pw->pw_name : "?";
     const char *group = gr ? gr->gr_name : "?";
 
-    printf("%s %s %s %s\n", modes, user, group, file);
+    //TIME
+    char time[64];
+
+    struct tm *tm = localtime(&sb.st_mtim.tv_sec);
+    strftime(time, sizeof(time), "%e %b %H:%M", tm);
+
+    printf(
+            "%s %lu %s %s %ld %s %s\n", 
+            modes, 
+            (unsigned long)sb.st_nlink, 
+            user, 
+            group, 
+            (long)sb.st_size, 
+            time, 
+            name
+          );
+}
+
+int alphabetical_sort(const void *pointer_to_a, const void *pointer_to_b) {
+    const char *a = *(const char **)pointer_to_a;
+    const char *b = *(const char **)pointer_to_b;
+
+    if(reverse) {
+        return strcmp(b, a);
+    }
+    return strcmp(a, b);
+}
+
+int size_sort(const void *pointer_to_a, const void *pointer_to_b) {
+    const char *name_a = *(const char **)pointer_to_a;
+    const char *name_b = *(const char **)pointer_to_b;
+
+    char path_a[4096];
+    char path_b[4096];
+
+    snprintf(path_a, sizeof(path_a), "%s/%s", current_sorting_path, name_a);
+    snprintf(path_b, sizeof(path_b), "%s/%s", current_sorting_path, name_b);
+
+    struct stat sb_a, sb_b;
+
+    if(lstat(path_a, &sb_a) < 0) {
+        perror(name_a); // in case the file is deleted or if the user doesn't have permission
+        return 0;
+    } else if(lstat(path_b, &sb_b) < 0) {
+        perror(name_b);
+        return 0;
+    }
+
+    //Sorting by size
+    if(reverse) {
+        if(sb_a.st_size > sb_b.st_size) return 1;
+        if(sb_a.st_size < sb_b.st_size) return -1;
+        return strcmp(name_a, name_b);
+    }
+    
+    if(sb_a.st_size > sb_b.st_size) return -1;
+    if(sb_a.st_size < sb_b.st_size) return 1;
+    return strcmp(name_a, name_b);
 }
