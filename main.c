@@ -31,18 +31,22 @@ void mode_string(mode_t mode, char *str);
 void print_long(const char *dir, const char *name);
 int alphabetical_sort(const void *pointer_to_a, const void *pointer_to_b);
 int size_sort(const void *pointer_to_a, const void *pointer_to_b);
+int time_sort(const void *pointer_to_a, const void *pointer_to_b);
+int time_comparison(struct timespec t1, struct timespec t2);
 
-int show_all = 0;       /* -a: include entries starting with . */
-int long_format = 0;    /* -l: use long listing format */
-int reverse = 0;        /* -r: reverse order while sorting */
-int size = 0;           /* -S: sort by file size */
+int show_all = 0;           /* -a: include entries starting with . */
+int long_format = 0;        /* -l: use long listing format */
+int reverse = 0;            /* -r: reverse order while sorting */
+int size = 0;               /* -S: sort by file size */
+int show_all_no_father = 0; /* -A: include entries starting with . except for .. & .*/
+int time_sorting = 0;       /* -t: sorting by time */
 
 const char *current_sorting_path = NULL;
 
 int main(int argc, char **argv) {
     int opt = 0;
 
-    while((opt = getopt(argc, argv, "alrS")) != -1) {
+    while((opt = getopt(argc, argv, "alrSAt")) != -1) {
         switch(opt) {
             case 'a':
                 show_all = 1;
@@ -55,6 +59,12 @@ int main(int argc, char **argv) {
                 break;
             case 'S':
                 size = 1;
+                break;
+            case 'A':
+                show_all_no_father = 1;
+                break;
+            case 't':
+                time_sorting = 1;
                 break;
             default:
                 fprintf(stderr, "usage: %s [-alrS] [path]", argv[0]);
@@ -96,7 +106,10 @@ void list_directory(DIR *dir, const char *path) {
     }
 
     while((entry = readdir(dir)) != NULL) {
-        if(!show_all && entry->d_name[0] == '.') continue;
+        if(!show_all && !show_all_no_father && entry->d_name[0] == '.') continue;
+        if(show_all_no_father && !show_all) {
+            if(strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+        }
         if(total >= capacity) {
             capacity *= 2;
             char **temp = realloc(names, capacity *sizeof(char *));
@@ -117,6 +130,8 @@ void list_directory(DIR *dir, const char *path) {
     current_sorting_path = path;
     if(size) {
         qsort(names, total, sizeof(char *), size_sort);
+    } else if(time_sorting) {
+        qsort(names, total, sizeof(char *), time_sort);
     } else {
         qsort(names, total, sizeof(char *), alphabetical_sort);
     }
@@ -130,6 +145,8 @@ void list_directory(DIR *dir, const char *path) {
 
         free(names[i]);
     }
+
+    free(names);
 }
 
 /**
@@ -203,6 +220,9 @@ void print_long(const char *dir, const char *name) {
  * alphabetical_sort - qsort comparator for lexical ordering
  * @pointer_to_a: Pointer to first entry string
  * @pointer_to_b: Pointer to second entry string
+ *
+ * Returns a negative value if a < b, positive if a > b, or 0 if equal.
+ * Respects the global 'reverse' flag.
  */
 int alphabetical_sort(const void *pointer_to_a, const void *pointer_to_b) {
     const char *a = *(const char **)pointer_to_a;
@@ -218,6 +238,9 @@ int alphabetical_sort(const void *pointer_to_a, const void *pointer_to_b) {
  * size_sort - qsort comparator for file size ordering
  * @pointer_to_a: Pointer to first entry string
  * @pointer_to_b: Pointer to second entry string
+ *
+ * Returns a negative value if a < b, positive if a > b, or 0 if equal.
+ * Respects the global 'reverse' flag.
  */
 int size_sort(const void *pointer_to_a, const void *pointer_to_b) {
     const char *name_a = *(const char **)pointer_to_a;
@@ -244,8 +267,65 @@ int size_sort(const void *pointer_to_a, const void *pointer_to_b) {
         if(sb_a.st_size < sb_b.st_size) return -1;
         return strcmp(name_a, name_b);
     }
-    
+
     if(sb_a.st_size > sb_b.st_size) return -1;
     if(sb_a.st_size < sb_b.st_size) return 1;
     return strcmp(name_a, name_b);
+}
+
+/**
+ * time_sort - qsort comparator for file tinme ordering
+ * @pointer_to_a: Pointer to first entry string 
+ * @pointer_to_b: Pointer to second entry string
+ * 
+ * Returns a negative value if a < b, positive if a > b, or 0 if equal.
+ * Respects the global 'reverse' flag.
+ */ 
+int time_sort(const void *pointer_to_a, const void *pointer_to_b) {
+    const char *name_a = *(const char **)pointer_to_a;
+    const char *name_b = *(const char **)pointer_to_b;
+
+    char path_a[4096];
+    char path_b[4096];
+
+    snprintf(path_a, sizeof(path_a), "%s/%s", current_sorting_path, name_a);
+    snprintf(path_b, sizeof(path_b), "%s/%s", current_sorting_path, name_b);
+
+    struct stat sb_a, sb_b;
+
+    if(lstat(path_a, &sb_a) < 0) {
+        perror(name_a);
+        return 0;
+    } else if(lstat(path_b, &sb_b) < 0) {
+        perror(name_b);
+        return 0;
+    }
+
+    int time_comp = time_comparison(sb_b.st_ctim, sb_a.st_ctim);
+
+    if(time_comp != 0) {
+        return reverse ? -time_comp : time_comp;
+    } else {
+        return reverse ? strcmp(name_b, name_a) : strcmp(name_a, name_b);
+    }
+}
+
+/**
+ * time_comparison - Helper function to compare two timespec structures
+ * @t1: First time struct (seconds and nanoseconds)
+ * @t2: Second time struct (seconds and nanoseconds)
+ * 
+ * Compares tv_sec first. If they are equal, falls back to comparing 
+ * tv_nsec for higher precision. Returns -1 if t1 < t2, 1 if t1 > t2, 
+ * or 0 if they are identical.
+ */
+int time_comparison(struct timespec t1, struct timespec t2) {
+    if(t1.tv_sec != t2.tv_sec) {
+        return t1.tv_sec < t2.tv_sec ? -1 : 1;
+    }
+
+    if(t1.tv_nsec != t2.tv_nsec) {
+        return t1.tv_nsec < t2.tv_nsec ? -1 : 1;
+    }
+    return 0;
 }
