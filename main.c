@@ -26,9 +26,17 @@
 #include <time.h>
 #include <string.h>
 
+struct column_widths {
+    int nlink;
+    int user;
+    int group;
+    int size;
+};
+
 void list_directory(DIR *dir, const char *path);
+void compute_max_widths(const char *dir, char **names, int total, struct column_widths *widths);
 void mode_string(mode_t mode, char *str);
-void print_long(const char *dir, const char *name);
+void print_long(const char *dir, const char *name, struct column_widths *widths);
 int alphabetical_sort(const void *pointer_to_a, const void *pointer_to_b);
 int size_sort(const void *pointer_to_a, const void *pointer_to_b);
 int time_sort(const void *pointer_to_a, const void *pointer_to_b);
@@ -43,11 +51,14 @@ int time_sorting = 0;       /* -t: sorting by time */
 
 const char *current_sorting_path = NULL;
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv) 
+{
     int opt = 0;
 
-    while((opt = getopt(argc, argv, "alrSAt")) != -1) {
-        switch(opt) {
+    while((opt = getopt(argc, argv, "alrSAt")) != -1) 
+    {
+        switch(opt) 
+        {
             case 'a':
                 show_all = 1;
                 break;
@@ -76,7 +87,8 @@ int main(int argc, char **argv) {
 
     DIR *dir = opendir(path);
 
-    if(!dir) {
+    if(!dir) 
+    {
         perror("opendir");
         return 1;
     }
@@ -93,28 +105,34 @@ int main(int argc, char **argv) {
  * @dir: Open directory stream to process
  * @path: Filesystem path associated with the directory stream
  */
-void list_directory(DIR *dir, const char *path) {
+void list_directory(DIR *dir, const char *path) 
+{
     struct dirent *entry;
 
     int total = 0;
     int capacity = 10;
     char **names = malloc(capacity * sizeof(char *));
 
-    if(names == NULL) {
+    if(names == NULL) 
+    {
         perror("**names malloc");
         return;
     }
 
-    while((entry = readdir(dir)) != NULL) {
+    while((entry = readdir(dir)) != NULL) 
+    {
         if(!show_all && !show_all_no_father && entry->d_name[0] == '.') continue;
-        if(show_all_no_father && !show_all) {
+        if(show_all_no_father && !show_all) 
+        {
             if(strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
         }
-        if(total >= capacity) {
+        if(total >= capacity) 
+        {
             capacity *= 2;
             char **temp = realloc(names, capacity *sizeof(char *));
 
-            if(temp == NULL) {
+            if(temp == NULL) 
+            {
                 perror("names realloc");
                 for(int i = 0; i < total; i++) free(names[i]);
                 free(names);
@@ -128,18 +146,30 @@ void list_directory(DIR *dir, const char *path) {
     }
 
     current_sorting_path = path;
-    if(size) {
+    if(size) 
+    {
         qsort(names, total, sizeof(char *), size_sort);
-    } else if(time_sorting) {
+    } 
+    else if(time_sorting) 
+    {
         qsort(names, total, sizeof(char *), time_sort);
-    } else {
+    } 
+    else 
+    {
         qsort(names, total, sizeof(char *), alphabetical_sort);
     }
 
-    for(int i = 0; i < total; i++) {
-        if(long_format) {
-            print_long(path, names[i]);
-        } else {
+    struct column_widths widths;
+
+    compute_max_widths(path, names, total, &widths);
+    for(int i = 0; i < total; i++) 
+    {
+        if(long_format) 
+        {
+            print_long(path, names[i], &widths);
+        } 
+        else 
+        {
             printf("%s\n", names[i]);
         }
 
@@ -150,11 +180,65 @@ void list_directory(DIR *dir, const char *path) {
 }
 
 /**
+ * compute_max_widths - Calculate maximum column_widths for long listing format
+ * @dir: Parent directory path
+ * @names: Array of entry filenames
+ * @total: Total number of entries
+ * @widths: Pointer to column_widths structure to store maximum widths
+ */
+void compute_max_widths(const char *dir, char **names, int total, struct column_widths *widths) 
+{
+    widths->nlink = 0;
+    widths->user = 0;
+    widths->group = 0;
+    widths->size = 0;
+
+    for(int i = 0; i < total; i++) {
+        char fullpath[4096];
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", dir, names[i]);
+        
+        struct stat sb;
+        if(lstat(fullpath, &sb) < 0)
+        {
+            perror(names[i]);
+            return;
+        }   
+
+        char buffer[32];
+
+        snprintf(buffer, sizeof(buffer), "%ld", sb.st_nlink);
+        int len = strlen(buffer);
+        if(len > widths->nlink)
+        {
+            widths->nlink = len;
+        }
+
+        struct passwd *pw = getpwuid(sb.st_uid);
+        struct group *gr = getgrgid(sb.st_gid);
+
+        /* Fallback to '?' if UID/GID cannot be mapped */
+        const char *user = pw ? pw->pw_name : "?";
+        const char *group = gr ? gr->gr_name : "?";
+        
+        len = strlen(user);
+        if(len > widths->user)  widths->user = len;
+
+        len = strlen(group);
+        if(len > widths->group) widths->group = len;
+        
+        snprintf(buffer, sizeof(buffer), "%ld", sb.st_size);
+        len = strlen(buffer);
+        if(len > widths->size)  widths->size = len;
+    }
+}
+
+/**
  * mode_string - Construct a POSIX file permission string
  * @mode: File type and mode bits from stat structure
  * @str: Destination buffer of at least 11 bytes to hold the result
  */
-void mode_string(mode_t mode, char *str) {
+void mode_string(mode_t mode, char *str) 
+{
     if (S_ISDIR(mode))          str[0] = 'd';
     else if (S_ISCHR(mode))     str[0] = 'c';
     else if (S_ISBLK(mode))     str[0] = 'b';
@@ -180,12 +264,14 @@ void mode_string(mode_t mode, char *str) {
  * @dir: Parent directory path
  * @name: Entry filename
  */
-void print_long(const char *dir, const char *name) {
+void print_long(const char *dir, const char *name, struct column_widths *widths) 
+{
     char fullpath[4096]; /* Enforce Linux PATH_MAX limit */
     snprintf(fullpath, sizeof(fullpath), "%s/%s", dir, name);
 
     struct stat sb;
-    if(lstat(fullpath, &sb) < 0) {
+    if(lstat(fullpath, &sb) < 0) 
+    {
         perror(name); /* Handle race conditions where target is removed/inaccessible */
         return;
     }
@@ -202,18 +288,19 @@ void print_long(const char *dir, const char *name) {
 
     char time_buf[64];
     struct tm *tm = localtime(&sb.st_mtim.tv_sec);
-    strftime(time_buf, sizeof(time_buf), "%e %b %H:%M", tm);
+
+    strftime(time_buf, sizeof(time_buf), "%b %e %H:%M", tm);
 
     printf(
-            "%s %lu %s %s %ld %s %s\n", 
+            "%s %*lu %*s %*s %*ld %s %s\n", 
             modes, 
-            (unsigned long)sb.st_nlink, 
-            user, 
-            group, 
-            (long)sb.st_size, 
+            widths->nlink, (unsigned long)sb.st_nlink, 
+            widths-> user, user, 
+            widths->group, group, 
+            widths->size, (long)sb.st_size, 
             time_buf, 
             name
-          );
+            );
 }
 
 /**
@@ -224,11 +311,13 @@ void print_long(const char *dir, const char *name) {
  * Returns a negative value if a < b, positive if a > b, or 0 if equal.
  * Respects the global 'reverse' flag.
  */
-int alphabetical_sort(const void *pointer_to_a, const void *pointer_to_b) {
+int alphabetical_sort(const void *pointer_to_a, const void *pointer_to_b) 
+{
     const char *a = *(const char **)pointer_to_a;
     const char *b = *(const char **)pointer_to_b;
 
-    if(reverse) {
+    if(reverse) 
+    {
         return strcmp(b, a);
     }
     return strcmp(a, b);
@@ -242,7 +331,8 @@ int alphabetical_sort(const void *pointer_to_a, const void *pointer_to_b) {
  * Returns a negative value if a < b, positive if a > b, or 0 if equal.
  * Respects the global 'reverse' flag.
  */
-int size_sort(const void *pointer_to_a, const void *pointer_to_b) {
+int size_sort(const void *pointer_to_a, const void *pointer_to_b) 
+{
     const char *name_a = *(const char **)pointer_to_a;
     const char *name_b = *(const char **)pointer_to_b;
 
@@ -254,15 +344,19 @@ int size_sort(const void *pointer_to_a, const void *pointer_to_b) {
 
     struct stat sb_a, sb_b;
 
-    if(lstat(path_a, &sb_a) < 0) {
+    if(lstat(path_a, &sb_a) < 0) 
+    {
         perror(name_a);
         return 0;
-    } else if(lstat(path_b, &sb_b) < 0) {
+    } 
+    else if(lstat(path_b, &sb_b) < 0) 
+    {
         perror(name_b);
         return 0;
     }
 
-    if(reverse) {
+    if(reverse) 
+    {
         if(sb_a.st_size > sb_b.st_size) return 1;
         if(sb_a.st_size < sb_b.st_size) return -1;
         return strcmp(name_a, name_b);
@@ -274,14 +368,15 @@ int size_sort(const void *pointer_to_a, const void *pointer_to_b) {
 }
 
 /**
- * time_sort - qsort comparator for file tinme ordering
+ * time_sort - qsort comparator for file time ordering
  * @pointer_to_a: Pointer to first entry string 
  * @pointer_to_b: Pointer to second entry string
  * 
  * Returns a negative value if a < b, positive if a > b, or 0 if equal.
  * Respects the global 'reverse' flag.
  */ 
-int time_sort(const void *pointer_to_a, const void *pointer_to_b) {
+int time_sort(const void *pointer_to_a, const void *pointer_to_b) 
+{
     const char *name_a = *(const char **)pointer_to_a;
     const char *name_b = *(const char **)pointer_to_b;
 
@@ -293,19 +388,25 @@ int time_sort(const void *pointer_to_a, const void *pointer_to_b) {
 
     struct stat sb_a, sb_b;
 
-    if(lstat(path_a, &sb_a) < 0) {
+    if(lstat(path_a, &sb_a) < 0) 
+    {
         perror(name_a);
         return 0;
-    } else if(lstat(path_b, &sb_b) < 0) {
+    } 
+    else if(lstat(path_b, &sb_b) < 0) 
+    {
         perror(name_b);
         return 0;
     }
 
-    int time_comp = time_comparison(sb_b.st_ctim, sb_a.st_ctim);
+    int time_comp = time_comparison(sb_b.st_mtim, sb_a.st_mtim);
 
-    if(time_comp != 0) {
+    if(time_comp != 0) 
+    {
         return reverse ? -time_comp : time_comp;
-    } else {
+    } 
+    else 
+    {
         return reverse ? strcmp(name_b, name_a) : strcmp(name_a, name_b);
     }
 }
@@ -319,12 +420,15 @@ int time_sort(const void *pointer_to_a, const void *pointer_to_b) {
  * tv_nsec for higher precision. Returns -1 if t1 < t2, 1 if t1 > t2, 
  * or 0 if they are identical.
  */
-int time_comparison(struct timespec t1, struct timespec t2) {
-    if(t1.tv_sec != t2.tv_sec) {
+int time_comparison(struct timespec t1, struct timespec t2) 
+{
+    if(t1.tv_sec != t2.tv_sec) 
+    {
         return t1.tv_sec < t2.tv_sec ? -1 : 1;
     }
 
-    if(t1.tv_nsec != t2.tv_nsec) {
+    if(t1.tv_nsec != t2.tv_nsec) 
+    {
         return t1.tv_nsec < t2.tv_nsec ? -1 : 1;
     }
     return 0;
