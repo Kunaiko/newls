@@ -160,7 +160,7 @@ void list_directory(DIR *dir, const char *path)
     }
 
     struct column_widths widths;
-    
+
     if(long_format)
     {
         long total_blocks = 0;
@@ -204,7 +204,7 @@ void colect_metrics(const char *dir, char **names, int total, struct column_widt
     {
         char fullpath[4096];
         snprintf(fullpath, sizeof(fullpath), "%s/%s", dir, names[i]);
-        
+
         struct stat sb;
         if(lstat(fullpath, &sb) < 0)
         {
@@ -227,13 +227,13 @@ void colect_metrics(const char *dir, char **names, int total, struct column_widt
         /* Fallback to '?' if UID/GID cannot be mapped */
         const char *user = pw ? pw->pw_name : "?";
         const char *group = gr ? gr->gr_name : "?";
-        
+
         len = strlen(user);
         if(len > widths->user)  widths->user = len;
 
         len = strlen(group);
         if(len > widths->group) widths->group = len;
-        
+
         snprintf(buffer, sizeof(buffer), "%ld", sb.st_size);
         len = strlen(buffer);
         if(len > widths->size)  widths->size = len;
@@ -290,6 +290,7 @@ void print_long(const char *dir, const char *name, struct column_widths *widths)
     char modes[11];
     mode_string(sb.st_mode, modes);
 
+
     struct passwd *pw = getpwuid(sb.st_uid);
     struct group *gr = getgrgid(sb.st_gid);
 
@@ -302,16 +303,37 @@ void print_long(const char *dir, const char *name, struct column_widths *widths)
 
     strftime(time_buf, sizeof(time_buf), "%b %e %H:%M", tm);
 
-    printf(
-            "%s %*lu %*s %*s %*ld %s %s\n", 
-            modes, 
-            widths->nlink, (unsigned long)sb.st_nlink, 
-            widths-> user, user, 
-            widths->group, group, 
-            widths->size, (long)sb.st_size, 
-            time_buf, 
-            name
-            );
+    if(S_ISLNK(sb.st_mode))
+    {
+        char destiny[4096];
+        ssize_t len = readlink(fullpath, destiny, sizeof(destiny) - 1);
+
+        destiny[len] = '\0';
+        printf(
+                "%s %*lu %*s %*s %*ld %s %s -> %s\n", 
+                modes, 
+                widths->nlink, (unsigned long)sb.st_nlink, 
+                widths->user, user, 
+                widths->group, group, 
+                widths->size, (long)sb.st_size, 
+                time_buf, 
+                name,
+                destiny
+              );
+    } 
+    else 
+    {
+        printf(
+                "%s %*lu %*s %*s %*ld %s %s\n", 
+                modes, 
+                widths->nlink, (unsigned long)sb.st_nlink, 
+                widths->user, user, 
+                widths->group, group, 
+                widths->size, (long)sb.st_size, 
+                time_buf, 
+                name
+              );
+    }
 }
 
 /**
