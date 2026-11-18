@@ -34,7 +34,7 @@ struct column_widths {
 };
 
 void list_directory(DIR *dir, const char *path);
-void compute_max_widths(const char *dir, char **names, int total, struct column_widths *widths);
+void colect_metrics(const char *dir, char **names, int total, struct column_widths *widths, long *total_blocks);
 void mode_string(mode_t mode, char *str);
 void print_long(const char *dir, const char *name, struct column_widths *widths);
 int alphabetical_sort(const void *pointer_to_a, const void *pointer_to_b);
@@ -160,8 +160,14 @@ void list_directory(DIR *dir, const char *path)
     }
 
     struct column_widths widths;
+    
+    if(long_format)
+    {
+        long total_blocks = 0;
+        colect_metrics(path, names, total, &widths, &total_blocks);
+        printf("total %ld\n", total_blocks);
+    }
 
-    compute_max_widths(path, names, total, &widths);
     for(int i = 0; i < total; i++) 
     {
         if(long_format) 
@@ -180,20 +186,22 @@ void list_directory(DIR *dir, const char *path)
 }
 
 /**
- * compute_max_widths - Calculate maximum column_widths for long listing format
+ * colect_metrics - Calculate maximum column_widths for long listing format & total allocated blocks
  * @dir: Parent directory path
  * @names: Array of entry filenames
  * @total: Total number of entries
  * @widths: Pointer to column_widths structure to store maximum widths
+ * @total_blocks: Pointer to accumulator for total allocated block count
  */
-void compute_max_widths(const char *dir, char **names, int total, struct column_widths *widths) 
+void colect_metrics(const char *dir, char **names, int total, struct column_widths *widths, long *total_blocks) 
 {
     widths->nlink = 0;
     widths->user = 0;
     widths->group = 0;
     widths->size = 0;
 
-    for(int i = 0; i < total; i++) {
+    for(int i = 0; i < total; i++) 
+    {
         char fullpath[4096];
         snprintf(fullpath, sizeof(fullpath), "%s/%s", dir, names[i]);
         
@@ -229,6 +237,9 @@ void compute_max_widths(const char *dir, char **names, int total, struct column_
         snprintf(buffer, sizeof(buffer), "%ld", sb.st_size);
         len = strlen(buffer);
         if(len > widths->size)  widths->size = len;
+
+        /* Scale kernel 512B blocks to standard 1KB display blocks */
+        *total_blocks += (sb.st_blocks + 1) / 2;
     }
 }
 
